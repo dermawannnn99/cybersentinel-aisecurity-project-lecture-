@@ -232,7 +232,3 @@ Input Data (CSV / TXT)
 | Anomali Umum | Isolation Forest (ML) |
 
 ---
-
-## Lisensi
-
-Didistribusikan di bawah lisensi MIT. Lihat `LICENSE` untuk informasi lebih lanjut.
