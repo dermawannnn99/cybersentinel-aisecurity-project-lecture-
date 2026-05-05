@@ -2,10 +2,10 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-COPY web/package.json web/package-lock.json ./
+COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY web .
+COPY . .
 
 RUN npm run build
 
