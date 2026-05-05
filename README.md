@@ -11,7 +11,7 @@
         @@@@@@@@   @  @@@@@               ░█▀█░░█░░░░▀▀█░█▀▀░█░░░█░█░█▀▄░░█░░░█░░░█░
             @@@@@@    @@@@                ░▀░▀░▀▀▀░░░▀▀▀░▀▀░░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░░▀░
          @@     @@  @@@@@                
-           @@@@@@   @@@@@                     Intelligent Threat Detection & Response System
+           @@@@@@   @@@@@                 Intelligent Threat Detection & Response System
                    @@@                      
                 @@@                         
            @@  @@@                          
