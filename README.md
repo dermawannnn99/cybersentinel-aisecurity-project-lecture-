@@ -71,17 +71,60 @@ Sistem ini mampu mendeteksi berbagai jenis serangan siber seperti SQL Injection,
 
 ---
 
+## Web Console & API
+
+Project ini sekarang punya 3 entry point utama:
+
+| Layer | Stack | Tujuan |
+|---|---|---|
+| **CLI** | Python | Jalur offline/debug dan batch dataset besar |
+| **API** | FastAPI | Membungkus engine analisis agar bisa dipakai UI dan integrasi lain |
+| **UI** | Next.js 15 + React 19 + TypeScript + Tailwind | Dashboard analyst untuk demo scan, upload dataset, review hasil, dan export CSV |
+
+### Endpoint API v1
+
+| Method | Endpoint | Fungsi |
+|---|---|---|
+| `GET` | `/api/v1/health` | Health/readiness check |
+| `POST` | `/api/v1/scans/demo` | Jalankan scan data simulasi |
+| `POST` | `/api/v1/scans/upload` | Upload dataset kecil-menengah dan scan sinkron |
+| `GET` | `/api/v1/exports/{token}` | Download CSV hasil scan dari sesi aktif |
+
+### Catatan Arsitektur
+
+- Engine analisis Python sekarang diekstrak ke pipeline reusable di `core/analysis.py`
+- CLI lama tetap dipertahankan
+- UI tidak fetch apa pun saat first render; request baru dikirim saat user menekan tombol scan
+- Hasil export bersifat **ephemeral** dan disimpan sementara di memory backend
+
+---
+
 ## Struktur Project
 
 ```
-cyber-sentinel-ai/
+cybersentinel-aisecurity-project-lecture-/
 │
-├── cybersentinel.py          # Entry point utama
+├── api/
+│   ├── Dockerfile            # Container backend untuk Railway / local Docker
+│   └── app/
+│       ├── main.py           # FastAPI app
+│       ├── config.py         # Konfigurasi service & CORS
+│       ├── schemas.py        # Pydantic response/request schema
+│       └── session_store.py  # Ephemeral CSV export storage
+│
+├── web/
+│   ├── Dockerfile            # Container frontend untuk local Docker
+│   ├── app/                  # Next.js App Router
+│   ├── components/           # Client/server UI components
+│   └── src/lib/api/          # Typed API client + generated schema
+│
+├── cybersentinel.py          # Entry point CLI utama
 │
 ├── banner/
 │   └── banner.py             # ASCII art & tampilan header
 │
 ├── core/
+│   ├── analysis.py           # Reusable analysis pipeline untuk CLI + API
 │   ├── helpers.py            # Fungsi warna & output terminal
 │   ├── loader.py             # Load & auto-detect format dataset
 │   ├── ml_engine.py          # Isolation Forest engine
@@ -98,7 +141,9 @@ cyber-sentinel-ai/
 ├── wordlists/
 │   └── signatures.py         # Signature & keyword serangan
 │
+├── docker-compose.yml        # Menjalankan frontend + backend bersama
 ├── requirements.txt
+├── requirements-dev.txt
 └── README.md
 ```
 
@@ -109,8 +154,8 @@ cyber-sentinel-ai/
 ### 1. Clone repository
 
 ```bash
-git clone https://github.com/username/cyber-sentinel-ai.git
-cd cyber-sentinel-ai
+git clone https://github.com/dermawannnn99/cybersentinel-aisecurity-project-lecture-.git
+cd cybersentinel-aisecurity-project-lecture-
 ```
 
 ### 2. Buat virtual environment (disarankan)
@@ -129,6 +174,60 @@ source venv/bin/activate
 
 ```bash
 pip install -r requirements.txt
+```
+
+---
+
+## Menjalankan Full Stack Secara Lokal
+
+### 1. Jalankan backend API
+
+```bash
+python -m uvicorn api.app.main:app --reload
+```
+
+Backend default berjalan di `http://localhost:8000`
+
+### 2. Jalankan frontend dashboard
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Frontend default berjalan di `http://localhost:3000`
+
+### 3. Environment variable frontend
+
+Buat file `.env.local` di folder `web/`:
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+```
+
+### 4. Generate type API dari OpenAPI
+
+```bash
+cd web
+npm run gen:api-types
+```
+
+### 5. Jalankan test
+
+```bash
+# Backend
+python -m pytest
+
+# Frontend
+cd web
+npm test
+```
+
+### 6. Jalankan dengan Docker Compose
+
+```bash
+docker compose up --build
 ```
 
 ---
@@ -174,6 +273,49 @@ python cybersentinel.py --input data/Thursday-WorkingHours.pcap_ISCX.csv --show-
 # Analisis + export + batasi tampilan 20 baris
 python cybersentinel.py --input data/KDDTrain+.txt --export output.csv --max-display 20
 ```
+
+---
+
+## Deployment
+
+### Frontend ke Vercel
+
+1. Import folder `web/` sebagai project baru di Vercel
+2. Set environment variable:
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=https://your-api-domain.railway.app
+```
+
+3. Build command:
+
+```bash
+npm run build
+```
+
+### Backend ke Railway
+
+1. Deploy repository yang sama dengan start command:
+
+```bash
+uvicorn api.app.main:app --host 0.0.0.0 --port $PORT
+```
+
+2. Tambahkan environment variable:
+
+```bash
+CORS_ORIGINS=https://your-vercel-app.vercel.app
+MAX_UPLOAD_BYTES=26214400
+EXPORT_TTL_SECONDS=1800
+```
+
+3. Railway bisa memakai `api/Dockerfile` jika ingin deploy berbasis container
+
+### Catatan Production
+
+- Upload browser v1 dibatasi sekitar **25 MB**
+- Dataset besar tetap direkomendasikan lewat CLI/offline
+- Export CSV hanya aktif selama sesi backend masih valid
 
 ---
 

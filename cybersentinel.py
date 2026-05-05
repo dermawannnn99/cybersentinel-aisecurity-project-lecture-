@@ -21,11 +21,9 @@ from colorama import Fore, Style, init
 init(autoreset=True)
 
 from banner.banner      import print_banner
+from core.analysis      import build_result_dataframe, sample_per_level
 from core.helpers       import section_header, step, ok, warn, SEP
 from core.loader        import load_data
-from core.rules         import run_rules
-from core.ml_engine     import run_isolation_forest
-from core.scorer        import score_all
 from output.display     import print_results_table, print_summary
 from output.exporter    import export_csv
 from data.dummy         import generate_dummy_data
@@ -116,8 +114,6 @@ def wait_for_run():
 
 # ── Proportional sampling per level ──────────────────────────────────────────
 
-LEVELS_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"]
-
 LEVEL_COLORS = {
     "CRITICAL": Fore.RED + Style.BRIGHT,
     "HIGH"    : Fore.RED,
@@ -127,75 +123,18 @@ LEVEL_COLORS = {
 }
 
 
-def sample_per_level(result, max_display, show_safe):
-    """
-    Ambil sample proporsional dari setiap level risk.
-    Setiap level yang punya data mendapat jatah = max_display // jumlah_level_aktif.
-    Sisa kuota diberikan ke CRITICAL.
-
-    Return: dict { level_str -> DataFrame }
-    """
-    levels = LEVELS_ORDER if show_safe else LEVELS_ORDER[:-1]  # skip SAFE jika tidak diminta
-
-    # Kumpulkan data per level yang benar-benar ada
-    level_dfs = {}
-    for lvl in levels:
-        sub = result[result["risk_label"] == lvl]
-        if not sub.empty:
-            level_dfs[lvl] = sub.sort_values("risk_score", ascending=False)
-
-    if not level_dfs:
-        return {}
-
-    n_active  = len(level_dfs)
-    per_level = max(1, max_display // n_active)
-    remainder = max_display - (per_level * n_active)
-
-    sampled = {}
-    first   = True
-    for lvl in levels:
-        if lvl not in level_dfs:
-            continue
-        quota          = per_level + (remainder if first else 0)
-        sampled[lvl]   = level_dfs[lvl].head(quota)
-        first          = False
-
-    return sampled
-
-
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
 def run_pipeline(df, max_display=50, show_safe=False):
-    # Step 1: Isolation Forest
-    section_header("AI ENGINE — ISOLATION FOREST")
-    predictions, if_scores = spin_for(
-        "Melatih Isolation Forest & mendeteksi anomali...",
-        run_isolation_forest, df,
+    section_header("ANALISIS TRAFFIC")
+    result = spin_for(
+        "Menjalankan pipeline analisis ML + rules + scoring...",
+        build_result_dataframe, df,
     )
-    n_anomaly = int((predictions == -1).sum())
+    n_anomaly = int(result["if_anomaly"].sum())
+    n_rule_hits = sum(1 for threats in result["threats"] if threats)
     ok(f"{n_anomaly:,} anomali terdeteksi dari {len(df):,} entri")
-
-    # Step 2: Rule-Based
-    section_header("RULE-BASED THREAT DETECTION")
-    all_threats = spin_for(
-        "Memindai payload & pola traffic...",
-        run_rules, df,
-    )
-    n_rule_hits = sum(1 for t in all_threats if t)
     ok(f"{n_rule_hits:,} entri terdeteksi rule engine")
-
-    # Step 3: Risk Score
-    section_header("RISK SCORING")
-    risk_scores, risk_labels = spin_for(
-        "Menggabungkan skor ML + rules \u2192 risk score 0\u2013100...",
-        score_all, df, predictions, if_scores, all_threats,
-    )
-
-    result = df.copy()
-    result["if_anomaly"]  = (predictions == -1)
-    result["threats"]     = all_threats
-    result["risk_score"]  = risk_scores
-    result["risk_label"]  = risk_labels
 
     # Step 4: Display — proporsional per level
     section_header("HASIL ANALISIS ANCAMAN")
@@ -214,7 +153,7 @@ def run_pipeline(df, max_display=50, show_safe=False):
               f"| Ditampilkan: {total_shown:,}  "
               f"| Total data: {len(result):,}{Style.RESET_ALL}\n")
 
-        for lvl in LEVELS_ORDER:
+        for lvl in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"]:
             if lvl not in sampled:
                 continue
             part      = sampled[lvl]

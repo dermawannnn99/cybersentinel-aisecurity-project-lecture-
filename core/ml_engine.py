@@ -40,14 +40,14 @@ def build_features(df):
     return X_scaled, scaler
 
 
-def run_isolation_forest(df, contamination=0.15, n_estimators=150):
+def run_isolation_forest(df, contamination=0.15, n_estimators=150, n_jobs=1):
     X_scaled, _ = build_features(df)
 
     model = IsolationForest(
         n_estimators=n_estimators,
         contamination=contamination,
         random_state=42,
-        n_jobs=-1,
+        n_jobs=n_jobs,
     )
     predictions = model.fit_predict(X_scaled)
     scores      = model.decision_function(X_scaled)

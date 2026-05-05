@@ -8,13 +8,15 @@ Mendukung tiga format:
     3. Format NSL-KDD      (KDDTrain+.txt / KDDTest+.txt)
 """
 
+from __future__ import annotations
+
 import os
-import sys
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 from colorama import Fore, Style
 
-from core.helpers import step, ok, err
+from core.helpers import err, ok, step
 
 NUMERIC_COLS = ["src_port", "dst_port", "packet_count", "byte_count", "duration"]
 
@@ -158,9 +160,20 @@ KDD_LABEL_MAP = {
 }
 
 
-def _load_nslkdd(filepath):
+def _emit(verbose: bool, func, message: str) -> None:
+    if verbose:
+        func(message)
+
+
+def _fail(message: str, exit_on_error: bool) -> None:
+    if exit_on_error:
+        err(message)
+    raise ValueError(message)
+
+
+def _load_nslkdd(filepath, *, verbose: bool):
     """Parse NSL-KDD .txt langsung tanpa konversi manual."""
-    step("Format NSL-KDD terdeteksi — parsing otomatis...")
+    _emit(verbose, step, "Format NSL-KDD terdeteksi — parsing otomatis...")
 
     df = pd.read_csv(filepath, header=None, names=KDD_COLUMNS)
 
@@ -177,8 +190,8 @@ def _load_nslkdd(filepath):
     out["payload"]      = ""
     out["label"]        = df["label"].map(lambda l: KDD_LABEL_MAP.get(l, "Unknown Attack"))
 
-    ok(f"NSL-KDD parsed — {len(out):,} baris, {out['label'].nunique()} kategori label")
-    return out
+    _emit(verbose, ok, f"NSL-KDD parsed — {len(out):,} baris, {out['label'].nunique()} kategori label")
+    return out, []
 
 
 def _is_cicids(df):
@@ -229,12 +242,13 @@ def _map_cicids_label(raw_label: str) -> str:
     return "Unknown Attack"
 
 
-def _load_cicids(df):
+def _load_cicids(df, *, verbose: bool):
     """
     Proses DataFrame CICIDS 2017 — rename kolom, isi kolom yang hilang,
     dan konversi label ke format internal CyberSentinel.
     """
-    step("Format CICIDS 2017 terdeteksi — mapping kolom...")
+    _emit(verbose, step, "Format CICIDS 2017 terdeteksi — mapping kolom...")
+    warnings = []
 
     # Rename kolom yang ada sesuai peta
     df = df.rename(columns={k: v for k, v in CICIDS_COL_MAP.items() if k in df.columns})
@@ -246,18 +260,23 @@ def _load_cicids(df):
         ).fillna("OTHER")
 
     # ── Isi kolom yang hilang di varian stripped (tanpa IP / Source Port) ──
+    synthesized_columns = []
     if "src_ip" not in df.columns:
         df["src_ip"] = "0.0.0.0"
+        synthesized_columns.append("src_ip")
 
     if "dst_ip" not in df.columns:
         df["dst_ip"] = "0.0.0.0"
+        synthesized_columns.append("dst_ip")
 
     if "src_port" not in df.columns:
         # Tidak ada di CSV ini — isi 0 sebagai placeholder
         df["src_port"] = 0
+        synthesized_columns.append("src_port")
 
     if "payload" not in df.columns:
         df["payload"] = ""
+        synthesized_columns.append("payload")
 
     # Konversi label CICIDS → label internal
     if "label" in df.columns:
@@ -265,16 +284,25 @@ def _load_cicids(df):
     else:
         df["label"] = "Unknown Attack"
 
+    if synthesized_columns:
+        warnings.append(
+            "Filled missing CICIDS columns with defaults: " + ", ".join(synthesized_columns)
+        )
+
+    unknown_count = int((df["label"] == "Unknown Attack").sum())
+    if unknown_count:
+        warnings.append(f"{unknown_count} rows were mapped to Unknown Attack.")
+
     n_labels = df["label"].nunique()
-    ok(f"Mapping kolom CICIDS selesai — {n_labels} kategori label ditemukan")
-    return df
+    _emit(verbose, ok, f"Mapping kolom CICIDS selesai — {n_labels} kategori label ditemukan")
+    return df, warnings
 
 
-def load_data(filepath):
-    step(f"Membaca file: {Fore.WHITE}{filepath}{Style.RESET_ALL}")
+def load_data_with_metadata(filepath, *, exit_on_error: bool = True, verbose: bool = True):
+    _emit(verbose, step, f"Membaca file: {Fore.WHITE}{filepath}{Style.RESET_ALL}")
 
     if not os.path.exists(filepath):
-        err(f"File tidak ditemukan: {filepath}")
+        _fail(f"File tidak ditemukan: {filepath}", exit_on_error)
 
     try:
         # ── Deteksi NSL-KDD dari ekstensi dan isi baris pertama ──────────────
@@ -289,32 +317,37 @@ def load_data(filepath):
         )
 
         if is_nslkdd:
-            df = _load_nslkdd(filepath)
+            df, warnings = _load_nslkdd(filepath, verbose=verbose)
 
         else:
             df = pd.read_csv(filepath, low_memory=False, encoding="utf-8", encoding_errors="replace")
-            ok(f"Loaded {Fore.WHITE}{len(df):,}{Style.RESET_ALL} {Fore.GREEN}baris, "
-               f"{Fore.WHITE}{len(df.columns)}{Style.RESET_ALL} {Fore.GREEN}kolom{Style.RESET_ALL}")
+            warnings = []
+            _emit(
+                verbose,
+                ok,
+                f"Loaded {Fore.WHITE}{len(df):,}{Style.RESET_ALL} {Fore.GREEN}baris, "
+                f"{Fore.WHITE}{len(df.columns)}{Style.RESET_ALL} {Fore.GREEN}kolom{Style.RESET_ALL}",
+            )
 
             # ── Auto-detect CICIDS 2017 (lengkap maupun varian stripped) ─────
             if _is_cicids(df):
-                df = _load_cicids(df)
+                df, cicids_warnings = _load_cicids(df, verbose=verbose)
+                warnings.extend(cicids_warnings)
 
             else:
                 # ── Format CyberSentinel / custom ─────────────────────────────
                 missing = [c for c in NUMERIC_COLS if c not in df.columns]
                 if missing:
-                    err(
+                    _fail(
                         f"Kolom tidak ditemukan: {missing}\n"
                         f"  Kolom wajib: {NUMERIC_COLS}\n"
                         f"  Tip: Pastikan file adalah format CyberSentinel, CICIDS 2017, "
-                        f"atau NSL-KDD (.txt)"
+                        f"atau NSL-KDD (.txt)",
+                        exit_on_error,
                     )
 
-    except SystemExit:
-        raise
     except Exception as e:
-        err(f"Gagal membaca file: {e}")
+        _fail(f"Gagal membaca file: {e}", exit_on_error)
 
     # ── Paksa tipe numerik untuk semua kolom angka ───────────────────────────
     for col in NUMERIC_COLS:
@@ -329,8 +362,20 @@ def load_data(filepath):
         "payload" : "",
         "protocol": "TCP",
     }
+    synthesized_defaults = []
     for col, val in defaults.items():
         if col not in df.columns:
             df[col] = val
+            synthesized_defaults.append(col)
 
+    if synthesized_defaults:
+        warnings.append(
+            "Filled missing standard columns with defaults: " + ", ".join(synthesized_defaults)
+        )
+
+    return df, warnings
+
+
+def load_data(filepath, *, exit_on_error: bool = True, verbose: bool = True):
+    df, _ = load_data_with_metadata(filepath, exit_on_error=exit_on_error, verbose=verbose)
     return df
