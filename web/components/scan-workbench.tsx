@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import React, { startTransition, useDeferredValue, useState, useTransition } from "react";
+import React, { startTransition, useDeferredValue, useState } from "react";
 
 import type { DemoScanRequest, ResultRow, ScanResponse } from "@/src/lib/api/generated";
 import { defaultScanApiClient, type ScanApiClient } from "@/src/lib/api/client";
@@ -24,6 +24,8 @@ interface ScanWorkbenchProps {
 }
 
 const levelOptions = ["ALL", "CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"] as const;
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_MB = MAX_UPLOAD_BYTES / (1024 * 1024);
 
 function buildSearchableText(row: ResultRow): string {
   return [row.src_ip, row.dst_ip, row.protocol, row.risk_label, row.threats.join(" ")]
@@ -39,23 +41,43 @@ function getStatusTone(label: string): string {
   return "text-signal";
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function numberInputValue(value: string, fallback: number, min: number, max: number): number {
+  const next = Number(value);
+
+  if (!Number.isFinite(next)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(next, min), max);
+}
+
 export function ScanWorkbench({
   apiBaseUrl,
   apiClient = defaultScanApiClient,
 }: ScanWorkbenchProps) {
   const [mode, setMode] = useState<"demo" | "upload">("demo");
-  const [rows, setRows] = useState(300);
+  const [rowsInput, setRowsInput] = useState("300");
   const [showSafe, setShowSafe] = useState(false);
-  const [maxDisplay, setMaxDisplay] = useState(50);
+  const [maxDisplayInput, setMaxDisplayInput] = useState("50");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [response, setResponse] = useState<ScanResponse | null>(null);
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<(typeof levelOptions)[number]>("ALL");
-  const [isPending, beginTransition] = useTransition();
+  const [isRunning, setIsRunning] = useState(false);
 
   const deferredQuery = useDeferredValue(query);
   const deferredLevel = useDeferredValue(level);
+  const rows = numberInputValue(rowsInput, 300, 50, 5000);
+  const maxDisplay = numberInputValue(maxDisplayInput, 50, 10, 500);
 
   const filteredRows = response
     ? response.rows.filter((row) => {
@@ -110,33 +132,52 @@ export function ScanWorkbench({
     });
   }
 
-  async function handleRunScan() {
+  function handleSelectedFileChange(file: File | null) {
+    setSelectedFile(file);
     setErrorMessage(null);
 
-    beginTransition(async () => {
-      try {
-        if (mode === "demo") {
-          await submitDemoScan({ rows, showSafe, maxDisplay });
-          return;
-        }
+    if (file && file.size > MAX_UPLOAD_BYTES) {
+      setErrorMessage(
+        `Selected file is ${(file.size / (1024 * 1024)).toFixed(1)} MB. Upload scans are capped at ${MAX_UPLOAD_MB} MB.`,
+      );
+    }
+  }
 
-        if (!selectedFile) {
-          setErrorMessage("Select a dataset file before running an upload scan.");
-          return;
-        }
+  async function handleRunScan() {
+    setErrorMessage(null);
+    setIsRunning(true);
 
-        await submitUploadScan(selectedFile);
-      } catch (error) {
-        setResponse(null);
-        setErrorMessage(error instanceof Error ? error.message : "Unexpected scan error.");
+    try {
+      if (mode === "demo") {
+        await submitDemoScan({ rows, showSafe, maxDisplay });
+        return;
       }
-    });
+
+      if (!selectedFile) {
+        setErrorMessage("Select a dataset file before running an upload scan.");
+        return;
+      }
+
+      if (selectedFile.size > MAX_UPLOAD_BYTES) {
+        setErrorMessage(
+          `Selected file is ${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB. Upload scans are capped at ${MAX_UPLOAD_MB} MB.`,
+        );
+        return;
+      }
+
+      await submitUploadScan(selectedFile);
+    } catch (error) {
+      setResponse(null);
+      setErrorMessage(error instanceof Error ? error.message : "Unexpected scan error.");
+    } finally {
+      setIsRunning(false);
+    }
   }
 
   return (
-    <section className="grid gap-6">
-      <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
-        <aside className="rounded-[32px] border border-white/10 bg-black/25 p-6 shadow-panel backdrop-blur">
+    <section className="grid min-w-0 gap-6">
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[360px_1fr]">
+        <aside className="min-w-0 overflow-hidden rounded-[28px] border border-white/10 bg-black/25 p-5 shadow-panel backdrop-blur sm:rounded-[32px] sm:p-6">
           <div className="space-y-3">
             <p className="text-xs uppercase tracking-[0.22em] text-signal">Mission Control</p>
             <h2 className="text-2xl font-semibold text-white">Run an analyst scan</h2>
@@ -146,9 +187,9 @@ export function ScanWorkbench({
             </p>
           </div>
 
-          <div className="mt-6 grid grid-cols-2 gap-3 rounded-3xl border border-white/10 bg-white/5 p-2">
+          <div className="mt-6 grid min-w-0 grid-cols-2 gap-2 rounded-3xl border border-white/10 bg-white/5 p-2 sm:gap-3">
             <button
-              className={`rounded-2xl px-4 py-3 text-sm transition ${
+              className={`min-w-0 rounded-2xl px-3 py-3 text-sm transition sm:px-4 ${
                 mode === "demo" ? "bg-signal text-ink" : "bg-transparent text-mist/75 hover:bg-white/5"
               }`}
               onClick={() => setMode("demo")}
@@ -157,7 +198,7 @@ export function ScanWorkbench({
               Demo Scan
             </button>
             <button
-              className={`rounded-2xl px-4 py-3 text-sm transition ${
+              className={`min-w-0 rounded-2xl px-3 py-3 text-sm transition sm:px-4 ${
                 mode === "upload" ? "bg-cobalt text-ink" : "bg-transparent text-mist/75 hover:bg-white/5"
               }`}
               onClick={() => setMode("upload")}
@@ -167,58 +208,65 @@ export function ScanWorkbench({
             </button>
           </div>
 
-          <div className="mt-6 grid gap-5">
-            <label className="grid gap-2">
+          <div className="mt-6 grid min-w-0 gap-5">
+            <label className="grid min-w-0 gap-2">
               <span className="text-sm text-mist/80">Returned rows per response</span>
               <input
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none ring-0 transition placeholder:text-mist/30 focus:border-signal"
+                className="w-full min-w-0 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none ring-0 transition placeholder:text-mist/30 focus:border-signal"
                 min={10}
                 max={500}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (!Number.isNaN(next)) setMaxDisplay(next);
-                }}
+                onChange={(event) => setMaxDisplayInput(event.target.value)}
                 type="number"
-                value={maxDisplay}
+                value={maxDisplayInput}
               />
             </label>
 
-            <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-mist/80">
+            <label className="flex min-w-0 items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-mist/80">
               <input
                 checked={showSafe}
-                className="h-4 w-4 accent-signal"
+                className="h-4 w-4 shrink-0 accent-signal"
                 onChange={(event) => setShowSafe(event.target.checked)}
                 type="checkbox"
               />
-              Include SAFE traffic in returned rows
+              <span className="min-w-0 leading-5">Include SAFE traffic in returned rows</span>
             </label>
 
             {mode === "demo" ? (
-              <label className="grid gap-2">
+              <label className="grid min-w-0 gap-2" key="demo-row-count">
                 <span className="text-sm text-mist/80">Demo row count</span>
                 <input
-                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition focus:border-signal"
+                  className="w-full min-w-0 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition focus:border-signal"
                   max={5000}
                   min={50}
-onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (!Number.isNaN(next)) setRows(next);
-                }}
-                type="number"
-                value={rows}
+                  onChange={(event) => setRowsInput(event.target.value)}
+                  type="number"
+                  value={rowsInput}
                 />
               </label>
             ) : (
-              <label className="grid gap-2">
+              <label className="grid min-w-0 gap-2" key="dataset-file">
                 <span className="text-sm text-mist/80">Dataset file</span>
                 <input
                   accept=".csv,.txt"
-                  className="rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-3 text-sm text-mist/80 file:mr-4 file:rounded-full file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-sm file:text-white"
-                  onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+                  className="sr-only"
+                  onChange={(event) => handleSelectedFileChange(event.target.files?.[0] ?? null)}
                   type="file"
                 />
+                <span className="grid min-w-0 cursor-pointer gap-3 rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-3 transition hover:border-cobalt/50 hover:bg-white/10 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+                  <span className="inline-flex w-fit items-center justify-center rounded-full bg-white/10 px-3 py-2 text-sm font-medium text-white">
+                    Choose File
+                  </span>
+                  <span className="grid min-w-0 gap-1">
+                    <span className="truncate text-sm text-mist/80">
+                      {selectedFile ? selectedFile.name : "No dataset selected"}
+                    </span>
+                    {selectedFile ? (
+                      <span className="text-xs text-mist/45">{formatFileSize(selectedFile.size)}</span>
+                    ) : null}
+                  </span>
+                </span>
                 <span className="text-xs text-mist/50">
-                  Interactive uploads are capped at 25 MB for browser-first scans.
+                  Interactive uploads are capped at {MAX_UPLOAD_MB} MB for browser-first scans.
                 </span>
               </label>
             )}
@@ -226,11 +274,11 @@ onChange={(event) => {
 
           <button
             className="mt-8 inline-flex w-full items-center justify-center rounded-2xl bg-white px-4 py-3 text-sm font-medium text-ink transition hover:bg-signal disabled:cursor-not-allowed disabled:bg-white/20 disabled:text-mist/50"
-            disabled={isPending}
+            disabled={isRunning}
             onClick={handleRunScan}
             type="button"
           >
-            {isPending ? "Running scan..." : mode === "demo" ? "Run demo scan" : "Upload and scan"}
+            {isRunning ? "Running scan..." : mode === "demo" ? "Run demo scan" : "Upload and scan"}
           </button>
 
           {errorMessage ? (
@@ -250,9 +298,6 @@ onChange={(event) => {
                 </h2>
               </div>
               <div className="flex flex-wrap gap-3 text-sm text-mist/70">
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-2 font-mono">
-                  API: {apiBaseUrl}
-                </span>
                 {response?.exportToken ? (
                   <a
                     className="rounded-full border border-signal/30 bg-signal/10 px-3 py-2 font-medium text-signal transition hover:bg-signal/20"

@@ -10,7 +10,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -97,8 +97,8 @@ def create_demo_scan(payload: DemoScanRequest) -> ScanResponse:
 @app.post("/api/v1/scans/upload", response_model=ScanResponse)
 async def create_upload_scan(
     file: UploadFile = File(...),
-    showSafe: bool = False,
-    maxDisplay: int = 50,
+    showSafe: bool = Form(False),
+    maxDisplay: int = Form(50, ge=10, le=500),
 ) -> ScanResponse:
     file_bytes = await file.read()
 

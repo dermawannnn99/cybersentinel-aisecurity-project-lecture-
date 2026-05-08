@@ -1,11 +1,15 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ScanApiClient } from "@/src/lib/api/client";
 import type { ScanResponse } from "@/src/lib/api/generated";
 import { ScanWorkbench } from "@/components/scan-workbench";
+
+afterEach(() => {
+  cleanup();
+});
 
 const mockResponse: ScanResponse = {
   meta: {
@@ -74,5 +78,52 @@ describe("ScanWorkbench", () => {
       "http://localhost:8000/api/v1/exports/demo-token",
     );
     expect(screen.getByText("10.0.0.99")).toBeInTheDocument();
+  });
+
+  it("uploads a selected dataset with numeric scan options", async () => {
+    const user = userEvent.setup();
+    const apiClient = buildClient();
+
+    render(<ScanWorkbench apiBaseUrl="http://localhost:8000" apiClient={apiClient} />);
+
+    await user.click(screen.getByRole("button", { name: /upload dataset/i }));
+
+    const maxDisplayInput = screen.getByLabelText(/returned rows per response/i);
+    await user.clear(maxDisplayInput);
+    await user.type(maxDisplayInput, "25");
+
+    const file = new File(
+      ["src_port,dst_port,packet_count,byte_count,duration\n1234,80,10,512,1.5\n"],
+      "traffic.csv",
+      { type: "text/csv" },
+    );
+    await user.upload(screen.getByLabelText(/dataset file/i), file);
+    await user.click(screen.getByRole("button", { name: /upload and scan/i }));
+
+    await waitFor(() => {
+      expect(apiClient.uploadScan).toHaveBeenCalledWith("http://localhost:8000", {
+        file,
+        showSafe: false,
+        maxDisplay: 25,
+      });
+    });
+  });
+
+  it("blocks upload scans for files over the browser upload cap", async () => {
+    const user = userEvent.setup();
+    const apiClient = buildClient();
+
+    render(<ScanWorkbench apiBaseUrl="http://localhost:8000" apiClient={apiClient} />);
+
+    await user.click(screen.getByRole("button", { name: /upload dataset/i }));
+
+    const file = new File(["large"], "large.csv", { type: "text/csv" });
+    Object.defineProperty(file, "size", { value: 26 * 1024 * 1024 });
+
+    await user.upload(screen.getByLabelText(/dataset file/i), file);
+    await user.click(screen.getByRole("button", { name: /upload and scan/i }));
+
+    expect(screen.getByText(/upload scans are capped at 25 mb/i)).toBeInTheDocument();
+    expect(apiClient.uploadScan).not.toHaveBeenCalled();
   });
 });
