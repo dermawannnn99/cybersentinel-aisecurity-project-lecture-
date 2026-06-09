@@ -7,11 +7,28 @@ Machine Learning Engine — Isolation Forest untuk deteksi anomali traffic.
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from core.helpers import step, ok, warn
 
 BASE_COLS = ["src_port", "dst_port", "packet_count", "byte_count", "duration"]
+
+# Nilai flag TCP yang paling sering muncul pada traffic serangan di NSL-KDD.
+# S0 = SYN tanpa balasan (DoS/scan), REJ = koneksi ditolak, RSTO/RSTR = reset paksa.
+# Dengan encoding ordinal ini, IF bisa membedakan pola koneksi normal (SF)
+# dari pola serangan berdasarkan urutan kategorisasi.
+_FLAG_ORDER = ["SF", "S0", "REJ", "RSTO", "RSTR", "SH", "S1", "S2", "S3", "OTH", "-"]
+_PROTO_ORDER = ["TCP", "UDP", "ICMP", "OTHER"]
+
+
+def _encode_categorical(series: pd.Series, known_order: list) -> pd.Series:
+    """
+    Encode kolom kategorikal ke integer berdasarkan urutan yang sudah ditentukan.
+    Nilai yang tidak dikenal di-map ke indeks terakhir (unknown).
+    Ini lebih stabil daripada LabelEncoder karena urutan konsisten antar dataset.
+    """
+    mapping = {v: i for i, v in enumerate(known_order)}
+    return series.str.upper().map(mapping).fillna(len(known_order)).astype(int)
 
 
 def build_features(df):
@@ -31,6 +48,25 @@ def build_features(df):
     features["log_packet_count"] = np.log1p(features["packet_count"].clip(lower=0))
     features["log_byte_count"]   = np.log1p(features["byte_count"].clip(lower=0))
     features["log_duration"]     = np.log1p(features["duration"].clip(lower=0))
+
+    # ── Fitur kategorikal: flag dan protocol ──────────────────────────────────
+    # flag (TCP connection state) sangat diskriminatif untuk deteksi serangan:
+    #   - Traffic normal mayoritas SF (established & closed normal)
+    #   - DoS/scan cenderung S0 (SYN tanpa SYN-ACK) atau REJ
+    # protocol juga informatif: serangan ICMP flood, UDP sweep berbeda dari TCP normal.
+    if "flag" in df.columns:
+        features["flag_enc"] = _encode_categorical(
+            df["flag"].astype(str).fillna("-"), _FLAG_ORDER
+        )
+    else:
+        features["flag_enc"] = 0
+
+    if "protocol" in df.columns:
+        features["protocol_enc"] = _encode_categorical(
+            df["protocol"].astype(str).fillna("TCP"), _PROTO_ORDER
+        )
+    else:
+        features["protocol_enc"] = 0
 
     # Bersihkan hasil akhir dari inf/nan yang mungkin masih tersisa
     features = features.replace([np.inf, -np.inf], 0).fillna(0)
